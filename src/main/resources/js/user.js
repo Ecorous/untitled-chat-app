@@ -42,3 +42,16 @@ async function updateUser() {
         window.location.reload()
     }
 }
+
+async function resetToken() {
+    let token = await checkLogin()
+    let resp = await fetch(root_data + "/user/reset", {
+        method: "POST",
+        headers: {
+            Authorization: token
+        }
+    })
+    let json = await resp.json()
+    localStorage.setItem("token", json.token)
+    window.location.reload()
+}

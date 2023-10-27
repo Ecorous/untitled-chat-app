@@ -153,6 +153,11 @@ fun Application.configureRouting() {
 						text("Update")
 					}
 					button {
+						id = "reset-token-button"
+						onClick = "resetToken()"
+						text("Reset Token (will logout all devices)")
+					}
+					button {
 						id = "logout-button"
 						onClick = "logout()"
 						text("Logout")
