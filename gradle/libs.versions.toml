@@ -1,0 +1,57 @@
+[versions]
+ktor = "2.3.5"
+kotlin = "1.9.10"
+logback = "1.4.11"
+exposed = "0.44.0"
+sqlite = "3.43.2.1"
+kotlin_css = "1.0.0-pre.129-kotlin-1.4.20"
+nbvcxz = "1.5.1"
+password4j = "1.7.0"
+kotlinx_datetime = "0.4.1"
+catppuccin = "1.0.0"
+h2 = "2.1.210"
+postgresql = "42.2.2"
+
+[libraries]
+ktor_server_core = { module = "io.ktor:ktor-server-core-jvm", version.ref = "ktor" }
+ktor_server_host_common = { module = "io.ktor:ktor-server-host-common-jvm", version.ref = "ktor" }
+ktor_server_status_pages = { module = "io.ktor:ktor-server-status-pages-jvm", version.ref = "ktor" }
+ktor_server_content_negotiation = { module = "io.ktor:ktor-server-content-negotiation-jvm", version.ref = "ktor" }
+ktor_serialisation_kotlinx = { module = "io.ktor:ktor-serialization-kotlinx-json-jvm", version.ref = "ktor" }
+ktor_server_html = { module = "io.ktor:ktor-server-html-builder-jvm", version.ref = "ktor" }
+ktor_server_mustache = { module = "io.ktor:ktor-server-mustache-jvm", version.ref = "ktor" }
+ktor_server_websockets = { module = "io.ktor:ktor-server-websockets-jvm", version.ref = "ktor" }
+ktor_server_netty = { module = "io.ktor:ktor-server-netty-jvm", version.ref = "ktor" }
+
+exposed_core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+exposed_jbdc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+exposed_javatime = { module = "org.jetbrains.exposed:exposed-java-time", version.ref = "exposed" }
+
+kotlin_css = { module = "org.jetbrains:kotlin-css-jvm", version.ref = "kotlin_css" }
+sqlite = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
+h2 = { module = "com.h2database:h2", version.ref = "h2"}
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql"}
+logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+nbvcxz = { module = "me.gosimple:nbvcxz", version.ref = "nbvcxz" }
+password4j = { module = "com.password4j:password4j", version.ref = "password4j" }
+kotlinx_datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx_datetime" }
+# com.catppuccin:catppuccin-palette:1.0.0
+catppuccin = { module = "com.catppuccin:catppuccin-palette", version.ref="catppuccin"}
+
+kotlin_test_junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+ktor_server_tests = { module = "io.ktor:ktor-server-tests-jvm" }
+
+[bundles]
+ktor = [
+    "ktor_server_core",
+    "ktor_server_host_common",
+    "ktor_server_status_pages",
+    "ktor_server_content_negotiation",
+    "ktor_serialisation_kotlinx",
+    "ktor_server_html",
+    "ktor_server_mustache",
+    "ktor_server_websockets",
+    "ktor_server_netty",
+]
+
+exposed = ["exposed_core", "exposed_jbdc", "exposed_javatime"]
