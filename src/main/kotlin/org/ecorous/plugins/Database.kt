@@ -26,6 +26,7 @@ fun Application.configureDatabases() {
 		"example"
 	)
 	transaction(database) {
+		SchemaUtils.drop(Tokens)
 		SchemaUtils.create(Users)
 		SchemaUtils.create(Tokens)
 	}
