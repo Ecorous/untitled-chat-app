@@ -18,26 +18,32 @@ import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.*
 
+lateinit var db: Database
+
 fun Application.configureDatabases() {
-	val database = Database.connect(
+	db = Database.connect(
 		"jdbc:postgresql://localhost:5432/postgres",
 		"org.postgresql.Driver",
 		"postgres",
 		"example"
 	)
-	transaction(database) {
+	transaction(db) {
 		SchemaUtils.drop(Tokens)
 		SchemaUtils.create(Users)
 		SchemaUtils.create(Tokens)
+		SchemaUtils.create(Lodges)
+		SchemaUtils.create(LodgeMembers)
+		SchemaUtils.create(LodgeCabins)
+		SchemaUtils.create(Cabins)
+		SchemaUtils.create(CabinMessages)
+		SchemaUtils.create(Messages)
 	}
-	val userManager = UserManager(database)
-	val tokenManager = TokenManager(database)
 	routing {
 		get("/users") {
 			headers {
 				set("Accept", "application/json")
 			}
-			call.respond(userManager.getPublicUsers())
+			call.respond(getAllPublicUsers())
 		}
 		
 		post("/user") {
@@ -67,18 +73,12 @@ fun Application.configureDatabases() {
 				)
 			}
 			val user = createUser(input) ?: return@post
-			userManager.pushToDB(user)
+			user.push()
 			call.respond(HttpStatusCode.Created, user.public())
 		}
 		
 		put("/user") {
-			val tokenS = call.request.headers["Authorization"]
-			if (tokenS == null) {
-				call.respond(HttpStatusCode.Unauthorized)
-				return@put
-			}
-			
-			val token = tokenManager.getTokenByString(tokenS)
+			val token = tokenFromCall()
 			if (token == null) {
 				call.respond(HttpStatusCode.Unauthorized)
 				return@put
@@ -97,7 +97,7 @@ fun Application.configureDatabases() {
 			input.pronouns?.let { newPronouns = it }
 			
 			// Remove the current user from the database
-			userManager.removeFromDB(token.user)
+			token.user.remove()
 			
 			// Create the updated user
 			val updatedUser = User(
@@ -110,7 +110,7 @@ fun Application.configureDatabases() {
 			)
 			
 			// Push the updated user to the database
-			userManager.pushToDB(updatedUser)
+			updatedUser.push()
 			
 			call.respond(updatedUser.public())
 		}
@@ -132,7 +132,7 @@ fun Application.configureDatabases() {
 				)
 				return@post
 			}
-			val user = userManager.getUserById(input.id)
+			val user = getUser(input.id)
 			if (user == null) {
 				call.respond(
 					HttpStatusCode.BadRequest,
@@ -147,12 +147,12 @@ fun Application.configureDatabases() {
 					mapOf("error" to "401", "message" to "unauthorized: incorrect password")
 				)
 			}
-			val token = tokenManager.getToken(user)
+			val token = user.getToken()
 			call.respond(HttpStatusCode.OK, mapOf("id" to token.user.id.toString(), "token" to token.token))
 		}
 		
 		get("/user/{id}") {
-			val token: Token? = getTokenFromCall(tokenManager)
+			val token: Token? = tokenFromCall()
 			if (token == null) {
 				call.respond(
 					HttpStatusCode.Unauthorized,
@@ -178,30 +178,369 @@ fun Application.configureDatabases() {
 			}
 		}
 		get("/user") {
-			val token: Token? = getTokenFromCall(tokenManager)
+			val token: Token? = tokenFromCall()
 			if (token == null) {
 				call.respond(
 					HttpStatusCode.Unauthorized,
 					mapOf("error" to "401", "message" to "unauthorized: invalid token provided (Authorization header)")
 				)
 				return@get
-			} else {
-				call.respond(token.user.public())
 			}
+			call.respond(token.user.public())
 		}
 		post("/user/reset") {
-			val token: Token? = getTokenFromCall(tokenManager)
+			val token: Token? = tokenFromCall()
 			if (token == null) {
 				call.respond(
 					HttpStatusCode.Unauthorized,
-					mapOf("error" to "401", "message" to "unauthorized: invalid token provided (Authorization header)")
+					mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
 				)
 				return@post
-			} else {
-				tokenManager.resetToken(token.user)
-				val newToken = tokenManager.getToken(token.user)
-				call.respond(mapOf("id" to newToken.user.id.toString(), "token" to newToken.token))
 			}
+			token.user.resetToken()
+			val newToken = token.user.getToken()
+			call.respond(mapOf("id" to newToken.user.id.toString(), "token" to newToken.token))
+			
+		}
+		post("/lodge/{id}/join") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@post
+			}
+			val param = call.parameters["id"]
+			if (param == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: id is null"
+					)
+				)
+				return@post
+			}
+			val lodge = getLodge(param)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@post
+			}
+			token.user.join(lodge)
+		}
+		post("/lodge") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@post
+			}
+			val json = call.receiveText()
+			val input = Json.decodeFromString<LodgeInput>(json)
+			var description = ""
+			var public = true
+			if (input.name == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: no name provided"
+					)
+				)
+				return@post
+			}
+			
+			if (input.description != null) {
+				description = input.description
+			}
+			if (input.public != null) {
+				public = input.public
+			}
+			
+			val lodge = token.user.createLodge(input.name, description, "", public)
+			call.respond(lodge)
+		}
+		post("/lodge/{id}/cabin") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@post
+			}
+			val param = call.parameters["id"]
+			if (param == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: lodge id not present"
+					)
+				)
+				return@post
+			}
+			val lodge = getLodge(param)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@post
+			}
+			
+			val json = call.receiveText()
+			val input = Json.decodeFromString<CabinInput>(json)
+			var topic = ""
+			var requireAdmin = false
+			if (input.name == null) {
+				call.respond(
+					HttpStatusCode.BadRequest,
+					mapOf("error" to "400", "message" to "bad request: no name provided")
+				)
+				return@post
+			}
+			input.topic?.let {
+				topic = input.topic
+			}
+			input.requireAdmin?.let {
+				requireAdmin = input.requireAdmin
+			}
+			val cabin = lodge.createCabin(token.user, input.name, topic, requireAdmin)
+			if (cabin == null) {
+				call.respond(
+					HttpStatusCode.Forbidden,
+					mapOf("error" to "403", "message" to "forbidden: only lodge admins can create cabins")
+				)
+				return@post
+			}
+			call.respond(cabin)
+		}
+		get("/lodge/{id}") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@get
+			}
+			val param = call.parameters["id"]
+			if (param == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: id is null"
+					)
+				)
+				return@get
+			}
+			val lodge = getLodge(param)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@get
+			}
+			if (!token.user.isMember(lodge) && !lodge.public) {
+				call.respond(
+					HttpStatusCode.Forbidden, mapOf(
+						"error" to "403",
+						"message" to "forbidden: tried to access non-public lodge"
+					)
+				)
+			}
+			call.respond(lodge)
+		}
+		get("/lodge/{lodgeId}/cabin/{cabinId}") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@get
+			}
+			val lodgeParam = call.parameters["lodgeId"]
+			if (lodgeParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: lodgeId is null"
+					)
+				)
+				return@get
+			}
+			val cabinParam = call.parameters["cabinId"]
+			if (cabinParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: cabinId is null"
+					)
+				)
+				return@get
+			}
+			val lodge = getLodge(lodgeParam)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@get
+			}
+			val cabin = lodge.getCabin(cabinParam)
+			if (cabin == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid cabin id"
+					)
+				)
+				return@get
+			}
+			call.respond(cabin)
+		}
+		post("/lodge/{lodgeId}/cabin/{cabinId}/message") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@post
+			}
+			val json = call.receiveText()
+			val input = Json.decodeFromString<MessageInput>(json)
+			if (input.content == null) {
+				call.respond(HttpStatusCode.BadRequest, mapOf(
+					"error" to "400",
+					"message" to "bad request: cannot send empty message"
+				))
+				return@post
+			}
+			
+			val lodgeParam = call.parameters["lodgeId"]
+			if (lodgeParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: lodgeId is null"
+					)
+				)
+				return@post
+			}
+			val cabinParam = call.parameters["cabinId"]
+			if (cabinParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: cabinId is null"
+					)
+				)
+				return@post
+			}
+			val lodge = getLodge(lodgeParam)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@post
+			}
+			val cabin = lodge.getCabin(cabinParam)
+			if (cabin == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid cabin id"
+					)
+				)
+				return@post
+			}
+			call.respond(cabin.sendMessage(token.user, input.content).public())
+		}
+		get("/lodge/{lodgeId}/cabin/{cabinId}/messages") {
+			val token = tokenFromCall()
+			if (token == null) {
+				call.respond(
+					HttpStatusCode.Unauthorized, mapOf(
+						"error" to "401",
+						"message" to "unauthorized: invalid token provided (Authorization header)"
+					)
+				)
+				return@get
+			}
+			val lodgeParam = call.parameters["lodgeId"]
+			if (lodgeParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: lodgeId is null"
+					)
+				)
+				return@get
+			}
+			val cabinParam = call.parameters["cabinId"]
+			if (cabinParam == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: cabinId is null"
+					)
+				)
+				return@get
+			}
+			val lodge = getLodge(lodgeParam)
+			if (lodge == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid lodge id"
+					)
+				)
+				return@get
+			}
+			val cabin = lodge.getCabin(cabinParam)
+			if (cabin == null) {
+				call.respond(
+					HttpStatusCode.BadRequest, mapOf(
+						"error" to "400",
+						"message" to "bad request: invalid cabin id"
+					)
+				)
+				return@get
+			}
+			call.respond(cabin.getPublicMessages())
 		}
 	}
 }
@@ -221,7 +560,10 @@ private suspend fun PipelineContext<Unit, ApplicationCall>.createUser(input: Use
 	if (!nbvcxz.estimate(input.password).isMinimumEntropyMet) {
 		call.respond(
 			HttpStatusCode.BadRequest,
-			mapOf("error" to "400", "message" to "bad request: password too weak :get_professional_help_immediately:")
+			mapOf(
+				"error" to "400",
+				"message" to "bad request: password too weak :get_professional_help_immediately:"
+			)
 		)
 		return null
 	}
